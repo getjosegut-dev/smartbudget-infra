@@ -1,0 +1,112 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Bot Health
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_recovery:
+        description: 'Forzar el re-registro del webhook ahora mismo (para probar el mecanismo, sin esperar 3 intentos reales)'
+        required: false
+        default: 'false'
+      skip_notify:
+        description: 'Saltear las notificaciones de Telegram durante esta prueba'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+env:
+  APP_URL: https://smartbudget-ai-eight.vercel.app
+
+jobs:
+  monitor:
+    name: Check bot webhook + escalate (0 / 10 / 20 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      action: ${{ steps.escalate.outputs.action }}
+    steps:
+      - name: Chequeo con escalada
+        id: escalate
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+          BOT_HEALTH_SECRET: ${{ secrets.BOT_HEALTH_SECRET }}
+          SKIP_NOTIFY: ${{ github.event.inputs.skip_notify }}
+          FORCE: ${{ github.event.inputs.force_recovery }}
+        run: |
+          notify() {
+            [ "$SKIP_NOTIFY" = "true" ] && return 0
+            curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+              -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+              -H "Content-Type: application/json" \
+              -d "{\"message\":\"$1\"}" || echo "No se pudo notificar (best-effort)."
+          }
+          check() {
+            curl -fsS --max-time 10 "$APP_URL/api/admin/bot-health" \
+              -H "Authorization: Bearer ${BOT_HEALTH_SECRET}" > /dev/null
+          }
+
+          if [ "$FORCE" = "true" ]; then
+            echo "Disparo forzado manualmente (workflow_dispatch, force_recovery=true)."
+            echo "action=recover" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          for attempt in 1 2 3; do
+            if check; then
+              [ "$attempt" -gt 1 ] && echo "Recuperado en el intento $attempt."
+              echo "action=none" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Intento $attempt falló."
+            if [ "$attempt" = 2 ]; then
+              notify "⚠️ El webhook del bot de Telegram viene fallando hace ~15-25 min. Si sigue así, en ~10 min más se intenta re-registrarlo automáticamente."
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Esperando 10 min antes del siguiente chequeo..."
+              sleep 600
+            fi
+          done
+          echo "action=recover" >> "$GITHUB_OUTPUT"
+
+  recover:
+    name: Automatic webhook reset
+    needs: monitor
+    if: needs.monitor.outputs.action == 'recover'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Urgent notification — reset starting
+        if: github.event.inputs.skip_notify != 'true'
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"message":"🚨 Bot de Telegram caído de forma sostenida (~25-35 min). Intentando re-registrar el webhook automáticamente: https://github.com/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'"}'
+
+      - name: Re-registrar webhook
+        env:
+          BOT_HEALTH_SECRET: ${{ secrets.BOT_HEALTH_SECRET }}
+        run: |
+          curl -fsS -X POST "$APP_URL/api/admin/bot-health" \
+            -H "Authorization: Bearer ${BOT_HEALTH_SECRET}"
+
+      - name: Notify completion
+        if: always() && github.event.inputs.skip_notify != 'true'
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          status="completado"
+          if [ "${{ job.status }}" != "success" ]; then status="FALLÓ — revisar a mano (puede ser un token revocado u otra causa que el re-registro no arregla)"; fi
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\":\"Re-registro automático del webhook $status. Si el bot sigue sin responder, la causa no era la URL del webhook — revisar token/logs a mano.\"}"

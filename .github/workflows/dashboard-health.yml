@@ -1,0 +1,114 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Dashboard Health
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+    inputs:
+      force_recovery:
+        description: 'Forzar el rollback ahora mismo (para probar el mecanismo, sin esperar 3 intentos reales)'
+        required: false
+        default: 'false'
+      skip_notify:
+        description: 'Saltear las notificaciones de Telegram durante esta prueba'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+
+env:
+  DASHBOARD_URL: https://smartbudget-analytics-dashboard.vercel.app
+  VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_DASHBOARD_PROJECT_ID }}
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+
+jobs:
+  monitor:
+    name: Check dashboard + escalate (0 / 10 / 20 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      action: ${{ steps.escalate.outputs.action }}
+    steps:
+      - name: Chequeo con escalada
+        id: escalate
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+          SKIP_NOTIFY: ${{ github.event.inputs.skip_notify }}
+          FORCE: ${{ github.event.inputs.force_recovery }}
+        run: |
+          notify() {
+            [ "$SKIP_NOTIFY" = "true" ] && return 0
+            curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+              -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+              -H "Content-Type: application/json" \
+              -d "{\"message\":\"$1\"}" || echo "No se pudo notificar (best-effort)."
+          }
+          check() { curl -fsS --max-time 10 "$DASHBOARD_URL" > /dev/null; }
+
+          if [ "$FORCE" = "true" ]; then
+            echo "Disparo forzado manualmente (workflow_dispatch, force_recovery=true)."
+            echo "action=recover" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          for attempt in 1 2 3; do
+            if check; then
+              [ "$attempt" -gt 1 ] && echo "Recuperado en el intento $attempt."
+              echo "action=none" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Intento $attempt falló."
+            if [ "$attempt" = 2 ]; then
+              notify "⚠️ El dashboard de analytics no responde hace ~60-70 min. Si sigue así, en ~10 min más se dispara un rollback automático al último deploy sano."
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "Esperando 10 min antes del siguiente chequeo..."
+              sleep 600
+            fi
+          done
+          echo "action=recover" >> "$GITHUB_OUTPUT"
+
+  recover:
+    name: Automatic rollback
+    needs: monitor
+    if: needs.monitor.outputs.action == 'recover'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Urgent notification — rollback starting
+        if: github.event.inputs.skip_notify != 'true'
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"message":"🚨 Dashboard de analytics caído de forma sostenida (~70-80 min). Iniciando rollback automático al último deploy sano: https://github.com/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'"}'
+
+      - name: Link al proyecto de Vercel
+        run: |
+          mkdir -p .vercel
+          echo "{\"projectId\":\"$VERCEL_PROJECT_ID\",\"orgId\":\"$VERCEL_ORG_ID\"}" > .vercel/project.json
+
+      - name: Rollback al deploy anterior
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: npx vercel@54 rollback --yes --token="$VERCEL_TOKEN" --scope="$VERCEL_SCOPE"
+
+      - name: Notify completion
+        if: always() && github.event.inputs.skip_notify != 'true'
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          status="completado"
+          if [ "${{ job.status }}" != "success" ]; then status="FALLÓ — revisar a mano en Vercel"; fi
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\":\"Rollback automático del dashboard $status.\"}"

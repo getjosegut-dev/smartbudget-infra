@@ -1,0 +1,26 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Finalize pending category questions
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  finalize:
+    name: Finalize expired pending categories
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Llamar al endpoint del cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/cron/finalize-pending-categories" \
+            -H "Authorization: Bearer ${CRON_SECRET}"

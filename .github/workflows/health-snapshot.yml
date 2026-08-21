@@ -1,0 +1,111 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Health Snapshot
+
+on:
+  schedule:
+    - cron: '0 */8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  APP_URL: https://smartbudget-ai-eight.vercel.app
+  DASHBOARD_URL: https://smartbudget-analytics-dashboard.vercel.app
+  CI_WORKFLOWS: 'Database Backup'
+
+jobs:
+  snapshot:
+    name: Chequear componentes y enviar snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Chequear App
+        id: app
+        run: |
+          if curl -fsS --max-time 10 "$APP_URL" > /dev/null; then
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            echo "detail=no responde" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Chequear Bot (webhook de Telegram)
+        id: bot
+        env:
+          BOT_HEALTH_SECRET: ${{ secrets.BOT_HEALTH_SECRET }}
+        run: |
+          if curl -fsS --max-time 10 "$APP_URL/api/admin/bot-health" \
+            -H "Authorization: Bearer ${BOT_HEALTH_SECRET}" > /dev/null; then
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            echo "detail=webhook no responde o desincronizado" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Chequear Dashboard
+        id: dashboard
+        run: |
+          if curl -fsS --max-time 10 "$DASHBOARD_URL" > /dev/null; then
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            echo "detail=no responde" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Chequear CI (última corrida de cada workflow trackeado)
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          failed=""
+          IFS=',' read -ra NAMES <<< "$CI_WORKFLOWS"
+          for name in "${NAMES[@]}"; do
+            conclusion=$(gh run list --repo "${{ github.repository }}" --workflow "$name" --limit 1 --json conclusion --jq '.[0].conclusion // "unknown"')
+            if [ "$conclusion" = "failure" ]; then
+              failed="${failed}${name}, "
+            fi
+          done
+          if [ -z "$failed" ]; then
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            echo "detail=última corrida en failure: ${failed%, }" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enviar snapshot
+        env:
+          HEALTH_SNAPSHOT_SECRET: ${{ secrets.HEALTH_SNAPSHOT_SECRET }}
+          APP_STATUS: ${{ steps.app.outputs.status }}
+          APP_DETAIL: ${{ steps.app.outputs.detail }}
+          BOT_STATUS: ${{ steps.bot.outputs.status }}
+          BOT_DETAIL: ${{ steps.bot.outputs.detail }}
+          DASHBOARD_STATUS: ${{ steps.dashboard.outputs.status }}
+          DASHBOARD_DETAIL: ${{ steps.dashboard.outputs.detail }}
+          CI_STATUS: ${{ steps.ci.outputs.status }}
+          CI_DETAIL: ${{ steps.ci.outputs.detail }}
+        run: |
+          payload=$(jq -n \
+            --arg appStatus "$APP_STATUS" --arg appDetail "$APP_DETAIL" \
+            --arg botStatus "$BOT_STATUS" --arg botDetail "$BOT_DETAIL" \
+            --arg dashStatus "$DASHBOARD_STATUS" --arg dashDetail "$DASHBOARD_DETAIL" \
+            --arg ciStatus "$CI_STATUS" --arg ciDetail "$CI_DETAIL" \
+            '{
+              app: { status: $appStatus, detail: (if $appDetail == "" then null else $appDetail end) },
+              bot: { status: $botStatus, detail: (if $botDetail == "" then null else $botDetail end) },
+              dashboard: { status: $dashStatus, detail: (if $dashDetail == "" then null else $dashDetail end) },
+              ci: { status: $ciStatus, detail: (if $ciDetail == "" then null else $ciDetail end) }
+            }')
+
+          curl -fsS -X POST "$APP_URL/api/admin/health-snapshot" \
+            -H "Authorization: Bearer ${HEALTH_SNAPSHOT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "$payload"
