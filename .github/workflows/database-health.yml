@@ -1,0 +1,120 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Database Health
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      skip_notify:
+        description: 'Saltear las notificaciones de Telegram durante esta prueba'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  health-check:
+    name: Check production health
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      healthy: ${{ steps.check.outputs.healthy }}
+    steps:
+      - name: Check connectivity (retry 3x, 15s apart — un blip no cuenta)
+        id: check
+        env:
+          PROD_DRIFT_CHECK_URL: ${{ secrets.PROD_DRIFT_CHECK_URL }}
+        run: |
+          for i in 1 2 3; do
+            if psql "$PROD_DRIFT_CHECK_URL" -c "select 1" > /dev/null 2>&1; then
+              echo "healthy=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Intento $i falló, reintentando en 15s..."
+            sleep 15
+          done
+          echo "healthy=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+  evaluate:
+    name: Evaluate consecutive failures
+    needs: health-check
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      severity: ${{ steps.evaluate.outputs.severity }}
+    steps:
+      - name: Count consecutive failed runs (incluida esta corrida)
+        id: evaluate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          THIS_RUN_HEALTHY: ${{ needs.health-check.outputs.healthy }}
+        run: |
+          if [ "$THIS_RUN_HEALTHY" = "true" ]; then
+            echo "severity=none" >> "$GITHUB_OUTPUT"
+            echo "Producción saludable — sin acción."
+            exit 0
+          fi
+          prev_conclusions=$(gh run list --workflow=database-health.yml \
+            --repo "${{ github.repository }}" --limit 3 \
+            --json conclusion,createdAt,event \
+            --jq '[.[] | select(.event == "schedule")] | .[1:3] | .[].conclusion')
+          fail_count=1
+          for c in $prev_conclusions; do
+            if [ "$c" = "failure" ]; then
+              fail_count=$((fail_count + 1))
+            else
+              break
+            fi
+          done
+          echo "Corridas fallidas consecutivas (incluida esta): $fail_count"
+          if [ "$fail_count" -ge 3 ]; then
+            echo "severity=critical" >> "$GITHUB_OUTPUT"
+            echo "::error::3+ corridas consecutivas fallidas — producción caída de forma sostenida."
+          elif [ "$fail_count" -eq 2 ]; then
+            echo "severity=warning" >> "$GITHUB_OUTPUT"
+            echo "::warning::2 corridas consecutivas fallidas."
+          else
+            echo "severity=none" >> "$GITHUB_OUTPUT"
+            echo "Primera falla — puede ser un blip, no se avisa todavía."
+          fi
+
+  notify-warning:
+    name: Early warning (2nd consecutive failure)
+    needs: [health-check, evaluate]
+    if: needs.evaluate.outputs.severity == 'warning' && github.event.inputs.skip_notify != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Notify (best-effort, no bloquea nada si falla)
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"message":"⚠️ La base de datos de producción no responde hace ~15-30 min. Puede ser un blip de red. Revisar si podés — no se va a tomar ninguna acción automática."}' \
+            || echo "No se pudo notificar (best-effort, no bloquea el workflow)."
+
+  notify-critical:
+    name: Critical alert (3rd consecutive failure)
+    needs: [health-check, evaluate]
+    if: needs.evaluate.outputs.severity == 'critical' && github.event.inputs.skip_notify != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Urgent notification — accion humana requerida
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"message":"🚨 La base de datos de producción viene caída hace ~45+ min (3 chequeos seguidos fallados). NO se va a restaurar nada automáticamente: un restore borra y reemplaza todos los datos, y si esto resulta ser un falso positivo se perderían hasta 4 horas de gastos reales. Revisá primero si la base está realmente perdida o si es un problema de red/proveedor. Si hace falta restaurar, seguí el procedimiento manual del runbook de restore con la credencial que ya está en el entorno local. Corrida: https://github.com/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'"}'
