@@ -16,7 +16,7 @@ permissions:
 env:
   APP_URL: https://smartbudget-ai-eight.vercel.app
   DASHBOARD_URL: https://smartbudget-analytics-dashboard.vercel.app
-  CI_WORKFLOWS: 'Database Backup'
+  PUBLIC_CI_WORKFLOWS: 'Database Backup,Database Health'
 
 jobs:
   snapshot:
@@ -64,22 +64,72 @@ jobs:
         id: ci
         env:
           GH_TOKEN: ${{ github.token }}
+          PRIVATE_TOKEN: ${{ secrets.PRIVATE_REPO_READ_TOKEN }}
+          PRIVATE_REPO: ${{ secrets.PRIVATE_REPO_SLUG }}
+          PRIVATE_CI_WORKFLOWS: ${{ secrets.PRIVATE_CI_WORKFLOWS }}
         run: |
           failed=""
-          IFS=',' read -ra NAMES <<< "$CI_WORKFLOWS"
-          for name in "${NAMES[@]}"; do
-            conclusion=$(gh run list --repo "${{ github.repository }}" --workflow "$name" --limit 1 --json conclusion --jq '.[0].conclusion // "unknown"')
-            if [ "$conclusion" = "failure" ]; then
-              failed="${failed}${name}, "
+          blind=""
+
+          check_repo() {
+            local repo="$1" list="$2" token="$3"
+            IFS=',' read -ra NAMES <<< "$list"
+            for name in "${NAMES[@]}"; do
+              [ -z "$name" ] && continue
+              conclusion=$(GH_TOKEN="$token" gh run list --repo "$repo" \
+                --workflow "$name" --limit 1 --json conclusion \
+                --jq '.[0].conclusion // "none"' 2>/dev/null || echo "error")
+              case "$conclusion" in
+                failure|timed_out|startup_failure) failed="${failed}${name}, " ;;
+                none|error) blind="${blind}${name}, " ;;
+              esac
+            done
+          }
+
+          check_repo "${{ github.repository }}" "$PUBLIC_CI_WORKFLOWS" "$GH_TOKEN"
+
+          runner_detail=""
+          if [ -n "$PRIVATE_TOKEN" ] && [ -n "$PRIVATE_REPO" ]; then
+            check_repo "$PRIVATE_REPO" "$PRIVATE_CI_WORKFLOWS" "$PRIVATE_TOKEN"
+
+            offline=$(GH_TOKEN="$PRIVATE_TOKEN" gh api \
+              "repos/$PRIVATE_REPO/actions/runners" \
+              --jq '[.runners[] | select(.status != "online")] | length' 2>/dev/null || echo "error")
+            if [ "$offline" = "error" ]; then
+              blind="${blind}runner, "
+            elif [ "$offline" != "0" ]; then
+              runner_detail="ejecutor de CI no disponible (corridas encoladas, no fallan)"
             fi
-          done
-          if [ -z "$failed" ]; then
-            echo "status=healthy" >> "$GITHUB_OUTPUT"
-            echo "detail=" >> "$GITHUB_OUTPUT"
           else
+            blind="${blind}repo privado (falta PRIVATE_REPO_READ_TOKEN), "
+          fi
+
+          echo "runner_detail=$runner_detail" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$runner_detail" ]; then
+            echo "status=down" >> "$GITHUB_OUTPUT"
+            echo "detail=$runner_detail" >> "$GITHUB_OUTPUT"
+          elif [ -n "$failed" ]; then
             echo "status=down" >> "$GITHUB_OUTPUT"
             echo "detail=última corrida en failure: ${failed%, }" >> "$GITHUB_OUTPUT"
+          elif [ -n "$blind" ]; then
+            echo "status=degraded" >> "$GITHUB_OUTPUT"
+            echo "detail=sin visibilidad de: ${blind%, }" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=healthy" >> "$GITHUB_OUTPUT"
+            echo "detail=" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Avisar si el ejecutor de CI no está disponible
+        if: steps.ci.outputs.runner_detail != ''
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+        run: |
+          curl -fsS -X POST "$APP_URL/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"message":"Ejecutor de CI no disponible: las corridas quedan ENCOLADAS, no fallan, asi que este es el unico aviso. Revisar y volver a levantarlo."}' \
+            || echo "No se pudo avisar (best-effort)."
 
       - name: Enviar snapshot
         env:
