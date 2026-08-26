@@ -1,0 +1,26 @@
+# Generado automáticamente — no editar a mano.
+# La fuente de verdad de este archivo vive en el repositorio privado del
+# proyecto. Los comentarios se eliminan al publicar.
+
+name: Scheduled Job 1
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Run scheduled job
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Llamar al endpoint del cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          curl -fsS --max-time 120 -X POST "https://smartbudget-ai-eight.vercel.app/api/cron/scheduled-job" \
+            -H "Authorization: Bearer ${CRON_SECRET}"
