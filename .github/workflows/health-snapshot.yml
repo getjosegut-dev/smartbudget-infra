@@ -76,9 +76,13 @@ jobs:
             IFS=',' read -ra NAMES <<< "$list"
             for name in "${NAMES[@]}"; do
               [ -z "$name" ] && continue
-              conclusion=$(GH_TOKEN="$token" gh run list --repo "$repo" \
+              if conclusion=$(GH_TOKEN="$token" gh run list --repo "$repo" \
                 --workflow "$name" --limit 1 --json conclusion \
-                --jq '.[0].conclusion // "none"' 2>/dev/null || echo "error")
+                --jq '.[0].conclusion // "none"' 2>/dev/null); then
+                :
+              else
+                conclusion="error"
+              fi
               case "$conclusion" in
                 failure|timed_out|startup_failure) failed="${failed}${name}, " ;;
                 none|error) blind="${blind}${name}, " ;;
@@ -92,9 +96,14 @@ jobs:
           if [ -n "$PRIVATE_TOKEN" ] && [ -n "$PRIVATE_REPO" ]; then
             check_repo "$PRIVATE_REPO" "$PRIVATE_CI_WORKFLOWS" "$PRIVATE_TOKEN"
 
-            offline=$(GH_TOKEN="$PRIVATE_TOKEN" gh api \
+            if offline=$(GH_TOKEN="$PRIVATE_TOKEN" gh api \
               "repos/$PRIVATE_REPO/actions/runners" \
-              --jq '[.runners[] | select(.status != "online")] | length' 2>/dev/null || echo "error")
+              --jq '[.runners[] | select(.status != "online")] | length' 2>/dev/null); then
+              :
+            else
+              offline="error"
+            fi
+            echo "TEMP_DEBUG2 raw=$(GH_TOKEN="$PRIVATE_TOKEN" gh api "repos/$PRIVATE_REPO/actions/runners" 2>&1) offline=[$offline]"
             if [ "$offline" = "error" ]; then
               blind="${blind}runner, "
             elif [ "$offline" != "0" ]; then
