@@ -95,6 +95,7 @@ jobs:
             offline=$(GH_TOKEN="$PRIVATE_TOKEN" gh api \
               "repos/$PRIVATE_REPO/actions/runners" \
               --jq '[.runners[] | select(.status != "online")] | length' 2>/dev/null || echo "error")
+            echo "TEMP_DEBUG raw=$(GH_TOKEN="$PRIVATE_TOKEN" gh api "repos/$PRIVATE_REPO/actions/runners" 2>&1) offline=$offline"
             if [ "$offline" = "error" ]; then
               blind="${blind}runner, "
             elif [ "$offline" != "0" ]; then
