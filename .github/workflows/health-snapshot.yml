@@ -103,7 +103,7 @@ jobs:
             else
               offline="error"
             fi
-            echo "TEMP_DEBUG2 raw=$(GH_TOKEN="$PRIVATE_TOKEN" gh api "repos/$PRIVATE_REPO/actions/runners" 2>&1) offline=[$offline]"
+            echo "TEMP_DEBUG3 blind=[$blind] failed=[$failed] offline=[$offline]"
             if [ "$offline" = "error" ]; then
               blind="${blind}runner, "
             elif [ "$offline" != "0" ]; then
