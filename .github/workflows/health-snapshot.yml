@@ -103,7 +103,6 @@ jobs:
             else
               offline="error"
             fi
-            echo "TEMP_DEBUG3 blind=[$blind] failed=[$failed] offline=[$offline]"
             if [ "$offline" = "error" ]; then
               blind="${blind}runner, "
             elif [ "$offline" != "0" ]; then
