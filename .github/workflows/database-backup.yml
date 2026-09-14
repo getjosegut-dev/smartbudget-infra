@@ -6,7 +6,7 @@ name: Database Backup
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -71,7 +71,8 @@ jobs:
         id: retention
         run: |
           hour=$(date -u +%H)
-          if [ "$hour" = "00" ]; then
+          minute=$(date -u +%M)
+          if [ "$hour" = "00" ] && [ "$minute" = "00" ]; then
             echo "days=30" >> "$GITHUB_OUTPUT"
             echo "Primera corrida del día UTC — retención larga (30 días)."
           else
