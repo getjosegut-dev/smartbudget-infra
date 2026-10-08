@@ -97,11 +97,11 @@ jobs:
           if-no-files-found: error
 
       - name: Notify admin on failure
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |
           curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
             -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
             -H "Content-Type: application/json" \
-            -d "{\"message\":\"⚠️ Falló el backup programado de la base de datos (database-backup.yml). Revisar: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+            -d "{\"message\":\"⚠️ El backup programado de la base NO se completó (database-backup.yml, estado: ${{ job.status }} — 'cancelled' suele ser el timeout de 15 min). Revisar: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
