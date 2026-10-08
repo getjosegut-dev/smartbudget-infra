@@ -78,10 +78,23 @@ jobs:
           done
           echo "action=recover" >> "$GITHUB_OUTPUT"
 
+      - name: Avisar si el chequeo no llego a terminar
+        if: ${{ failure() || cancelled() }}
+        env:
+          BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
+          SKIP_NOTIFY: ${{ github.event.inputs.skip_notify }}
+        run: |
+          if [ "$SKIP_NOTIFY" = "true" ]; then exit 0; fi
+          curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
+            -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"message\":\"⚠️ El chequeo de salud del DASHBOARD no llegó a terminar (estado: ${{ job.status }}; 'cancelled' suele ser el timeout de 30 min). No se sabe si está sano y el rollback automático no se evaluó. Revisar: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}\"}"
+
   recover:
     name: Automatic rollback
     needs: monitor
     if: needs.monitor.outputs.action == 'recover'
+    environment: ${{ github.event.inputs.force_recovery == 'true' && 'rollback-manual' || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
