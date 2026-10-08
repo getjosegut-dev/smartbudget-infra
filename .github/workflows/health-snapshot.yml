@@ -14,6 +14,7 @@ permissions:
   actions: read
 
 env:
+  PUBLIC_APP_URL: https://smartbudgetia.com
   APP_URL: https://smartbudget-ai-eight.vercel.app
   DASHBOARD_URL: https://smartbudget-analytics-dashboard.vercel.app
   PUBLIC_CI_WORKFLOWS: 'Database Backup,Database Health'
@@ -27,7 +28,7 @@ jobs:
       - name: Chequear App
         id: app
         run: |
-          if curl -fsS --max-time 10 "$APP_URL" > /dev/null; then
+          if curl -fsSL --max-time 10 "$PUBLIC_APP_URL" > /dev/null; then
             echo "status=healthy" >> "$GITHUB_OUTPUT"
             echo "detail=" >> "$GITHUB_OUTPUT"
           else
@@ -40,7 +41,7 @@ jobs:
         env:
           BOT_HEALTH_SECRET: ${{ secrets.BOT_HEALTH_SECRET }}
         run: |
-          if curl -fsS --max-time 10 "$APP_URL/api/admin/bot-health" \
+          if curl -fsSL --max-time 10 "$PUBLIC_APP_URL/api/admin/bot-health" \
             -H "Authorization: Bearer ${BOT_HEALTH_SECRET}" > /dev/null; then
             echo "status=healthy" >> "$GITHUB_OUTPUT"
             echo "detail=" >> "$GITHUB_OUTPUT"
@@ -52,7 +53,7 @@ jobs:
       - name: Chequear Dashboard
         id: dashboard
         run: |
-          if curl -fsS --max-time 10 "$DASHBOARD_URL" > /dev/null; then
+          if curl -fsSL --max-time 10 "$DASHBOARD_URL" > /dev/null; then
             echo "status=healthy" >> "$GITHUB_OUTPUT"
             echo "detail=" >> "$GITHUB_OUTPUT"
           else
@@ -136,8 +137,7 @@ jobs:
           curl -fsS -X POST "$APP_URL/api/admin/backup-alert" \
             -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{"message":"Ejecutor de CI no disponible: las corridas quedan ENCOLADAS, no fallan, asi que este es el unico aviso. Revisar y volver a levantarlo."}' \
-            || echo "No se pudo avisar (best-effort)."
+            -d '{"message":"Ejecutor de CI no disponible: las corridas quedan ENCOLADAS, no fallan, asi que este es el unico aviso. Revisar y volver a levantarlo."}'
 
       - name: Enviar snapshot
         env:

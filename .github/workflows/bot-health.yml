@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 env:
-  APP_URL: https://smartbudget-ai-eight.vercel.app
+  APP_URL: https://smartbudgetia.com
 
 jobs:
   monitor:
@@ -100,6 +100,7 @@ jobs:
     steps:
       - name: Urgent notification — reset starting
         if: github.event.inputs.skip_notify != 'true'
+        continue-on-error: true
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |
@@ -117,6 +118,7 @@ jobs:
 
       - name: Notify completion
         if: always() && github.event.inputs.skip_notify != 'true'
+        continue-on-error: true
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |

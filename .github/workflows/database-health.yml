@@ -12,7 +12,7 @@ on:
       skip_notify:
         description: 'Saltear las notificaciones de Telegram durante esta prueba'
         required: false
-        default: 'true'
+        default: 'false'
 
 permissions:
   contents: read
@@ -93,15 +93,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Notify (best-effort, no bloquea nada si falla)
+      - name: Notify (si no se entrega, la corrida queda en rojo)
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |
           curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
             -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{"message":"⚠️ La base de datos de producción no responde hace ~15-30 min. Puede ser un blip de red. Revisar si podés — no se va a tomar ninguna acción automática."}' \
-            || echo "No se pudo notificar (best-effort, no bloquea el workflow)."
+            -d '{"message":"⚠️ La base de datos de producción no respondió en 2 chequeos consecutivos (3 intentos cada uno, 15s de espera). Puede ser un blip de red. Este chequeo depende del planificador de GitHub, que espacia las corridas de forma irregular, así que no se puede afirmar hace cuánto empezó — mirar la corrida para las horas exactas. No se va a tomar ninguna acción automática."}'
 
   notify-critical:
     name: Critical alert (3rd consecutive failure)
@@ -117,4 +116,4 @@ jobs:
           curl -fsS -X POST "https://smartbudget-ai-eight.vercel.app/api/admin/backup-alert" \
             -H "Authorization: Bearer ${BACKUP_ALERT_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{"message":"🚨 La base de datos de producción viene caída hace ~45+ min (3 chequeos seguidos fallados). NO se va a restaurar nada automáticamente: un restore borra y reemplaza todos los datos, y si esto resulta ser un falso positivo se perderían hasta 4 horas de gastos reales. Revisá primero si la base está realmente perdida o si es un problema de red/proveedor. Si hace falta restaurar, seguí el procedimiento manual del runbook de restore con la credencial que ya está en el entorno local. Corrida: https://github.com/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'"}'
+            -d '{"message":"🚨 La base de datos de producción falló 3 chequeos consecutivos (9 intentos en total). NO se va a restaurar nada automáticamente: un restore borra y reemplaza todos los datos, y si esto resulta ser un falso positivo se perderían horas de gastos reales. OJO con el tiempo: este chequeo depende del planificador de GitHub, que espacia las corridas de forma irregular (medido: 6-8 h entre corridas), así que 3 fallas consecutivas NO significan 45 minutos — pueden ser muchas horas. Mirar las horas reales de las 3 corridas antes de concluir nada. Revisá primero si la base está realmente perdida o si es un problema de red/proveedor. Si hace falta restaurar, seguí el procedimiento manual del runbook de restore con la credencial que ya está en el entorno local. Corrida: https://github.com/'"${{ github.repository }}"'/actions/runs/'"${{ github.run_id }}"'"}'

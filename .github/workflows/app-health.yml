@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 env:
-  APP_URL: https://smartbudget-ai-eight.vercel.app
+  APP_URL: https://smartbudgetia.com
   VERCEL_SCOPE: ${{ secrets.VERCEL_SCOPE }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
@@ -53,7 +53,7 @@ jobs:
               -H "Content-Type: application/json" \
               -d "{\"message\":\"$1\"}" || echo "No se pudo notificar (best-effort)."
           }
-          check() { curl -fsS --max-time 10 "$APP_URL" > /dev/null; }
+          check() { curl -fsSL --max-time 10 "$APP_URL" > /dev/null; }
 
           if [ "$FORCE" = "true" ]; then
             echo "Disparo forzado manualmente (workflow_dispatch, force_recovery=true)."
@@ -100,6 +100,7 @@ jobs:
     steps:
       - name: Urgent notification — rollback starting
         if: github.event.inputs.skip_notify != 'true'
+        continue-on-error: true
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |
@@ -120,6 +121,7 @@ jobs:
 
       - name: Notify completion
         if: always() && github.event.inputs.skip_notify != 'true'
+        continue-on-error: true
         env:
           BACKUP_ALERT_SECRET: ${{ secrets.BACKUP_ALERT_SECRET }}
         run: |
